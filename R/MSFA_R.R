@@ -760,6 +760,8 @@ get_factor_count_bayes = function(X_s, method = "cng")
       nTot[[s]] = nFactors::nSeScree(data.frame(X_s[[s]]),model="factors")$nFactors[2] # take the R2: se was unreasonably high
   }
 
+  print(nTot)
+
   # check to see if there are too many factors, as in factanal
   p = ncol(X_s[[1]]) # assume same number of predictors for every study
   #dof <- 0.5 * ((p - factors)^2 - p - factors) from factanal
@@ -779,6 +781,7 @@ get_factor_count_bayes = function(X_s, method = "cng")
 
   # fit MSFA with the k* and j*
   k = maxShared
+  mod_k = NULL # in case it is not able to fit, detect the problem
   minShared = 1
 
   j_s = list()
@@ -787,6 +790,7 @@ get_factor_count_bayes = function(X_s, method = "cng")
 
   while(k > 0)
   {
+    print(paste("Testing k = ",k))
     if(checkConstraint(p,k,j_s,length(j_s)))
     {
 
@@ -813,6 +817,11 @@ get_factor_count_bayes = function(X_s, method = "cng")
   }
 
   # get eigenvalues that explain > 0.05 of total sum of eigenvalues
+  if(is.null(mod_k))
+  {
+    print("[get_factor_count] Unable to optimize.")
+    return(NA)
+  }
 
   sigma_phi = mod_k$Phi %*% t(mod_k$Phi)
   val_eigen = eigen(sigma_phi)$values
@@ -826,6 +835,7 @@ get_factor_count_bayes = function(X_s, method = "cng")
     # do same eigenvalue approach for the study specific matrices
     sigma_lambda_s = mod_k$Lambda_s[[s]] %*% t(mod_k$Lambda_s[[s]])
     val_eigen = eigen(sigma_lambda_s)$values
+    #scree.plot(val_eigen, title=paste("Screeplot Study",s))
     prop_var = val_eigen / sum(val_eigen)
     j_s[[s]]= sum(prop_var > 0.05)
 
