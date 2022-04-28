@@ -11,7 +11,7 @@ Fits the Multi-Study Factor Analysis model  via  [ECM algorithm](#1-fitting-a-ms
 The following example illustrates how to fit a MSFA model via the ECM Algorithm, 
 using a data set available in the Bioconductor repository (www.bioconductor.org). 
 
-## Getting the data
+### Getting the data
 Some pre-processing is required to get the data into a form suitable for the
 analysis. This was already done, and the resulting data frame is saved into the
 `data_immune` object. The commands that were used to form it are included
@@ -23,7 +23,7 @@ data(data_immune)
 help(data_immune)
 ```
 
-## Obtaining suitable starting values for model parameters
+### Obtaining suitable starting values for model parameters
 Then we get suitable starting values for model parameters, selecting K=3 common
 factors and (3, 4) study-specific factors for the two studies, respectively.
 
@@ -31,7 +31,7 @@ factors and (3, 4) study-specific factors for the two studies, respectively.
 start_value <- start_msfa(X_s = data_immune, k = 3, j_s = c(3, 4))
 ```
 
-## Fitting the model via ECM
+### Fitting the model via ECM
 Now everything is in place for estimating the model parameters via the ECM algorithm
 
 ```{r get estimate, results = FALSE}
