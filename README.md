@@ -1,9 +1,10 @@
 # MSFA
 
 author: Roberta De Vito, Ruggero Bellio
+
 this fork is modified by: Kate Hoff Shutta (kshutta@hsph.harvard.edu)
 
-Fits the Multi-Study Factor Analysis model  via  [ECM algorithm](#1-fitting-a-msfa-model-via-the-ecm-algorithm) and perform [graphical modeling] (#2-graphical-modeling) of multi-study data with an extension.
+Fits the Multi-Study Factor Analysis model  via  [ECM algorithm](#1-fitting-a-msfa-model-via-the-ecm-algorithm) and perform [graphical modeling](#2-graphical-modeling) of multi-study data with an extension.
 
 ## 1 Fitting a MSFA model via the ECM Algorithm
 
