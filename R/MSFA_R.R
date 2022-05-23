@@ -166,6 +166,11 @@ loglik_ecm <- function(Sig_s1,  ds_s, n_s, cov_s)
    return(val_tot)
 }
 
+loglik_vanilla <- function(Sig_s1,  ds_s, n_s, cov_s)
+{
+  val_tot = - (n_s/2) * log(ds_s) - (n_s/2) * tr(Sig_s1 %*% cov_s)
+  return(val_tot)
+}
 
 #' @keywords internal
 param2vect <- function(param, constraint)
@@ -731,6 +736,112 @@ checkConstraint = function(p,k,j_s,s)
   return(lhs <= rhs)
 }
 
+# This function is a wrapper for various ways of getting the number of factors from a single
+# dataset (i.e., not in the multi-study setting)
+get_n_factors_vanilla = function(X, method = "cng")
+{
+  if(method == "bartlett")
+    nTot = nFactors::nBartlett(data.frame(X),N=nrow(X))$nFactors[1] # take Bartlett method
+  if(method == "bentler")
+    nTot = nFactors::nBentler(data.frame(X),N=nrow(X))$nFactors
+  if(method == "cng")
+    nTot = nFactors::nCng(data.frame(X),model="factors")$nFactors# cattell, nelson, gorsuch
+  if(method == "mreg")
+    nTot = nFactors::nMreg(data.frame(X),model="factors")$nFactors[1] # take b
+  if(method == "paran")
+    nTot= paran(data.frame(X),cfa=T)$Retained
+  if(method == "scree")
+    nTot = nFactors::nScree(data.frame(X),model="factors")$Components$noc # take the optimal coordinates results (can implement others later)
+  if(method == "seScree")
+    nTot = nFactors::nSeScree(data.frame(X),model="factors")$nFactors[2] # take the R2: se was unreasonably high
+
+  return(nTot)
+}
+
+#' @export
+get_factor_count = function(X_s, method = "cng")
+{
+  print(paste("[get_factor_count] METHOD:",method))
+  nTot = list()
+  S = length(X_s)
+  p = ncol(X_s[[1]])
+
+  # compare with a baseline model that does not include study-specific factors, via AIC/BIC
+  nTotPooled = NA
+  X_s_pooled = do.call(rbind,X_s)
+  nTotPooled = get_n_factors_vanilla(X_s_pooled,method = method)
+  modelPooled = factanal(X_s_pooled,factors = nTotPooled)
+
+  # the covariance to test is PhiPhi^T + sigma
+  modelCov = modelPooled$loadings %*% t(modelPooled$loadings) + diag(modelPooled$uniquenesses)
+  pooledLL = loglik_vanilla(Sig_s1 = solve(modelCov),  ds_s = det(modelCov), n_s = nrow(X_s_pooled), cov_s = cov(X_s_pooled))
+
+  # number of parameters: p for Psi and k*(p-(k-1))/2 for Phi?
+  nparPooled <- p + nTotPooled * (p - (nTotPooled - 1) / 2)
+  pooledAIC = -2 * pooledLL + nparPooled * 2
+  pooledBIC = -2 * pooledLL + nparPooled * log(nrow(X_s_pooled))
+
+  print(paste("Pooled likelihood:",pooledLL))
+  print(paste("Pooled number of parameters:",nparPooled))
+  print("ICs: lower is better")
+  print(paste("factanal AIC:", pooledAIC))
+  print(paste("factanal BIC:", pooledBIC))
+
+  for(s in 1:S)
+  {
+    nTot[[s]] = get_n_factors_vanilla(X_s[[s]], method = method)
+  }
+
+  # check to see if there are too many factors, as in factanal
+  p = ncol(X_s[[1]]) # assume same number of predictors for every study
+  #dof <- 0.5 * ((p - factors)^2 - p - factors) from factanal
+  #dof = 0.5*(p^2 - 2*p*factors + factors^2 - p - factors)
+  #dof = 0.5*(factors^2 - (2*p+1)*factors + p^2-p)
+  roots = c((2*p+1 - sqrt((2*p+1)^2 - 4*(p^2-p)))/2,(2*p+1 + sqrt((2*p+1)^2 - 4*(p^2-p)))/2)
+  # problem: what if nTot is bigger than roots[1]
+  for(s in 1:S)
+  {
+    if(nTot[[s]] > floor(roots[1]))
+    {
+      nTot[[s]] = floor(roots[1]) # can't handle more factors than this
+    }
+  }
+
+  maxShared = min(unlist(nTot))-1
+  # for every possible value of maxShared
+  bics = rep(NA,maxShared)
+  for(k in maxShared:1)
+  {
+    j_s = unlist(nTot) - k
+    print(paste("Testing k = ",k))
+    if(checkConstraint(p,k,j_s,length(j_s)))
+    {
+
+      start_k = tryCatch(expr = {start_msfa(X_s,k=k,j_s=unlist(j_s),method="fa")},
+                         error = {function(e) NULL})
+
+      if(!is.null(start_k))
+      {
+        start_k = start_msfa(X_s,k=k,j_s=unlist(j_s),method="fa")
+        start_k$Phi = as.matrix(start_k$Phi)
+        start_k$Lambda_s = lapply(start_k$Lambda_s,as.matrix)
+        mod_k = ecm_msfa(X_s,start=start_k,extend=T,tol=1e-3) #,constraint="block_lower1")
+      }
+
+      else
+      {
+        print(paste("[get_factor_count] Not able to start fa with k=",k))
+      }
+    }
+    bics[k] =mod_k$BIC
+  }
+
+  return(list("bics"=bics,
+              "nTot"=nTot,
+              "k"=which.min(bics),
+              "j_s"=unlist(nTot)-which.min(bics)))
+}
+
 #' @export
 get_factor_count_bayes = function(X_s, method = "cng")
 {
@@ -741,23 +852,30 @@ get_factor_count_bayes = function(X_s, method = "cng")
   S = length(X_s)
   p = ncol(X_s[[1]])
 
+  # compare with a baseline model that does not include study-specific factors, via AIC/BIC
+  nTotPooled = NA
+  X_s_pooled = do.call(rbind,X_s)
+  nTotPooled = get_n_factors_vanilla(X_s_pooled,method = method)
+  modelPooled = factanal(X_s_pooled,factors = nTotPooled)
+
+  # the covariance to test is PhiPhi^T + sigma
+  modelCov = modelPooled$loadings %*% t(modelPooled$loadings) + diag(modelPooled$uniquenesses)
+  pooledLL = loglik_vanilla(Sig_s1 = solve(modelCov),  ds_s = det(modelCov), n_s = nrow(X_s_pooled), cov_s = cov(X_s_pooled))
+
+  # number of parameters: p for Psi and k*(p-(k-1))/2 for Phi?
+  nparPooled <- p + nTotPooled * (p - (nTotPooled - 1) / 2)
+  pooledAIC = -2 * pooledLL + nparPooled * 2
+  pooledBIC = -2 * pooledLL + nparPooled * log(nrow(X_s_pooled))
+
+  print(paste("Pooled likelihood:",pooledLL))
+  print(paste("Pooled number of parameters:",nparPooled))
+  print("ICs: lower is better")
+  print(paste("factanal AIC:", pooledAIC))
+  print(paste("factanal BIC:", pooledBIC))
+
   for(s in 1:S)
   {
-    # apply one of these methods to get total number
-    if(method == "bartlett")
-      nTot[[s]] = nFactors::nBartlett(data.frame(X_s[[s]]),N=nrow(X_s[[s]]))$nFactors[1] # take Bartlett method
-    if(method == "bentler")
-      nTot[[s]] = nFactors::nBentler(data.frame(X_s[[s]]),N=nrow(X_s[[s]]))$nFactors
-    if(method == "cng")
-      nTot[[s]] = nFactors::nCng(data.frame(X_s[[s]]),model="factors")$nFactors# cattell, nelson, gorsuch
-    if(method == "mreg")
-      nTot[[s]] = nFactors::nMreg(data.frame(X_s[[s]]),model="factors")$nFactors[1] # take b
-    if(method == "paran")
-      nTot[[s]]= paran(data.frame(X_s[[s]]),cfa=T)$Retained
-    if(method == "scree")
-      nTot[[s]] = nFactors::nScree(data.frame(X_s[[s]]),model="factors")$Components$noc # take the optimal coordinates results (can implement others later)
-    if(method == "seScree")
-      nTot[[s]] = nFactors::nSeScree(data.frame(X_s[[s]]),model="factors")$nFactors[2] # take the R2: se was unreasonably high
+    nTot[[s]] = get_n_factors_vanilla(X_s[[s]], method = method)
   }
 
   print(nTot)
@@ -786,7 +904,7 @@ get_factor_count_bayes = function(X_s, method = "cng")
 
   j_s = list()
   for(s in 1:S)
-    j_s[[s]]=nTot[[s]]-minShared
+    j_s[[s]]=nTot[[s]]-minShared # intentional? This gives more factors than maybe possible, makes sense in Bayes case perhaps
 
   while(k > 0)
   {
@@ -843,6 +961,14 @@ get_factor_count_bayes = function(X_s, method = "cng")
 
   k = nShared
 
+  msfa_AIC = mod_k$AIC
+  msfa_BIC = mod_k$BIC
+  print(paste("MSFA likelihood:",mod_k$looglik))
+  tot_s = k + unlist(j_s)
+  npar <- p * S + sum(tot_s * (p - (tot_s - 1) / 2))
+  print(paste("MSFA number of parameters:",npar))
+  print(paste("MSFA AIC:",mod_k$AIC))
+  print(paste("MSFA BIC:",mod_k$BIC))
   return(list("k"=k, "j_s" = j_s))
 }
 
