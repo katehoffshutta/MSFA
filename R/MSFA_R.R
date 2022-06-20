@@ -837,6 +837,7 @@ get_factor_count = function(X_s, method = "cng")
   }
 
   return(list("bics"=bics,
+              "pooledBIC"=pooledBIC,
               "nTot"=nTot,
               "k"=which.min(bics),
               "j_s"=unlist(nTot)-which.min(bics)))
