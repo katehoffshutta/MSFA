@@ -789,7 +789,7 @@ get_factor_count = function(X_s, method = "cng")
 
   for(s in 1:S)
   {
-    nTot[[s]] = get_n_factors_vanilla(X_s[[s]], method = method)
+    nTot[[s]] = get_n_factors_vanilla(X_s[[s]], method = method) 
   }
 
   # check to see if there are too many factors, as in factanal
@@ -964,7 +964,7 @@ get_factor_count_bayes = function(X_s, method = "cng")
 
   msfa_AIC = mod_k$AIC
   msfa_BIC = mod_k$BIC
-  print(paste("MSFA likelihood:",mod_k$looglik))
+  print(paste("MSFA likelihood:",mod_k$loglik))
   tot_s = k + unlist(j_s)
   npar <- p * S + sum(tot_s * (p - (tot_s - 1) / 2))
   print(paste("MSFA number of parameters:",npar))
