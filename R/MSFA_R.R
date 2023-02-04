@@ -721,7 +721,8 @@ ecm_fa <- function(X_s, tot_s, nIt = 50000, tol = 10^-7, block_lower = TRUE, rob
   return(res)
 }
 
-checkConstraint = function(p,k,j_s,s)
+#' @export
+check_constraint = function(p,k,j_s,s)
 {
   lhs = p*k-k*(k-1)/2
 
@@ -758,6 +759,20 @@ get_n_factors_vanilla = function(X, method = "cng")
   return(nTot)
 }
 
+#' Estimates the number of shared and study-specific factors present in multi-study data.
+#'
+#' @param X_s List of length \eqn{S}{S}, corresponding to number of different studies considered.
+#' Each element of the list contains a data matrix, with the same number of columns \eqn{P}{P} for all the studies.
+#' No standardization is carried out by the function.
+#' @param method Method for estimating the number of factors in the shared data, from the \code{nFactors} package. Default is "cng".
+#' Options include "bartlett","bentler","cng","mreg","paran","scree","seScree". See \code{nFactors} documentation for details.
+#' @return A list  containing  \code{bics}, a list of the BIC values for each number of factors considered,
+#' \code{pooledBIC}, the BIC for a standard factor analysis model that does not split the studies,
+#' \code{nTot}, the total number of factors estimated for each study according to minimum BIC,
+#' \code{k}, the number of shared factors estimated according to minimum BIC,
+#' \code{j_s}, the number of study-specific factors in each study estimated according to minimum BIC.
+#' @import nFactors
+#' @references Raiche, Gilles, David Magis, and Maintainer Gilles Raiche. "Package ‘nFactors’." Repository CRAN (2020): 1-58.
 #' @export
 get_factor_count = function(X_s, method = "cng")
 {
@@ -789,7 +804,7 @@ get_factor_count = function(X_s, method = "cng")
 
   for(s in 1:S)
   {
-    nTot[[s]] = get_n_factors_vanilla(X_s[[s]], method = method) 
+    nTot[[s]] = get_n_factors_vanilla(X_s[[s]], method = method)
   }
 
   # check to see if there are too many factors, as in factanal
@@ -814,7 +829,7 @@ get_factor_count = function(X_s, method = "cng")
   {
     j_s = unlist(nTot) - k
     print(paste("Testing k = ",k))
-    if(checkConstraint(p,k,j_s,length(j_s)))
+    if(check_constraint(p,k,j_s,length(j_s)))
     {
 
       start_k = tryCatch(expr = {start_msfa(X_s,k=k,j_s=unlist(j_s),method="fa")},
@@ -910,7 +925,7 @@ get_factor_count_bayes = function(X_s, method = "cng")
   while(k > 0)
   {
     print(paste("Testing k = ",k))
-    if(checkConstraint(p,k,j_s,length(j_s)))
+    if(check_constraint(p,k,j_s,length(j_s)))
     {
 
       start_k = tryCatch(expr = {start_msfa(X_s,k=k,j_s=unlist(j_s),method="fa")},
