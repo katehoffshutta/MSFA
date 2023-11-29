@@ -51,7 +51,7 @@ exp_values <- function(Phi, Lambda_s, Psi_s, Psi_s1, cov_s, getdet = FALSE)
     Tfcsfcs[[s]] <- delta_Phi[[s]] %*% cov_s[[s]] %*% t(delta_Phi[[s]]) + Delta_Phi[[s]]
     Tfcsfs[[s]] <- delta_Phi[[s]] %*% cov_s[[s]] %*% t(delta_Lambda[[s]]) + Covfcfs[[s]]
    }
- return(list(Txsfs = Txsfs, Txsfcs = Txsfcs, Tfsfs = Tfsfs,
+ return(list(Txsxs = cov_s, Txsfs = Txsfs, Txsfcs = Txsfcs, Tfsfs = Tfsfs,
              Tfcsfcs =  Tfcsfcs, Tfcsfs = Tfcsfs, ds_s=ds_s,  Sig_s1 = Sig_s1))
 }
 
@@ -164,6 +164,31 @@ loglik_ecm <- function(Sig_s1,  ds_s, n_s, cov_s)
    #####sum of each study-likelihood
    val_tot <- sum(val_s)
    return(val_tot)
+}
+
+loglik_msfax = function(Phi,Lambda_s,Gamma,H_s,n_s,cov_s)
+{
+  S <- length(n_s)
+  Sig_s = list()
+  for(s in 1:S)
+  {
+    Sig_s[[s]] = Phi %*% t(Phi) + Lambda_s[[s]] %*% t(Lambda_s[[s]]) + Gamma + H_s[[s]]
+  }
+
+  # get all the inverses
+  Sig_s1 = lapply(Sig_s,solve)
+
+  # get all the determinants
+  ds_s = lapply(Sig_s,det)
+
+  #####log likelihood value for each study
+  val_s <- c()
+  for(s in 1:S){
+    val_s[s] <- - (n_s[s]/2) * log(ds_s[[s]]) - (n_s[s]/2) * tr(Sig_s1[[s]] %*% cov_s[[s]])
+  }
+  #####sum of each study-likelihood
+  val_tot <- sum(val_s)
+  return(val_tot)
 }
 
 loglik_vanilla <- function(Sig_s1,  ds_s, n_s, cov_s)
@@ -415,7 +440,6 @@ ecm_msfa <- function(X_s, start, nIt = 50000, tol = 10^-7, constraint = "block_l
    Psi_new1 <- list()
    psi_new <- list()
 
-
    for(s in 1:S){
    	psi_new[[s]]  <- diag(cov_s[[s]] + Phi %*% Tfcsfcs[[s]] %*% t(Phi) + Lambda_s[[s]] %*%
    	                 Tfsfs[[s]] %*% t(Lambda_s[[s]]) - 2*Txsfcs[[s]] %*% t(Phi) -  2*Txsfs[[s]] %*% t(Lambda_s[[s]]) +
@@ -527,6 +551,7 @@ ecm_msfa <- function(X_s, start, nIt = 50000, tol = 10^-7, constraint = "block_l
   l0 <- loglik_ecm(Sig_s1,  ds_s, n_s, cov_s)
   if((trace) & (i %% 1000 == 0))  cat("i=", i, "Criterion for convergence ", abs(l_stop-l_stop0),  "\n")
   if((abs(l_stop-l_stop0)<tol) & i > 1 & l_stop != Inf) break
+
   Psi_s <- Psi_new
   psi_s <- psi_new
   Phi <- Phi_new
@@ -561,7 +586,7 @@ ecm_msfa <- function(X_s, start, nIt = 50000, tol = 10^-7, constraint = "block_l
           minVar = psi_s[[s]][pred]
 
         Gamma_trivial[pred,pred] = 0.5*minVar
-        if(minVar == 10000) print("[MSFA-X] High variance issue")
+        if(minVar == 10000) print("[MSFA-X] High variance issue; no study had variance less than 10000.")
       }
     }
 
@@ -587,7 +612,466 @@ ecm_msfa <- function(X_s, start, nIt = 50000, tol = 10^-7, constraint = "block_l
   return(res)
 }
 
+#' Estimates the parameters of a MSFA-X model
+#'
+#' Maximum likelihood estimation of the MSFA-X model parameters via the ECM
+#' algorithm.
+#'
+#' This function parallels the approach in the \code{ecm_msfa} function; please
+#' see \code{?ecm_msfa} for important details on identifiability. The difference
+#' between this function and original MSFA is that here we break down the noise
+#' term into a shared noise term parameterized by Gamma and a study-specific noise term
+#' parameterized by H_s for study s.
+#'
+#' @param X_s List of length \eqn{S}{S}, corresponding to number of different studies considered.
+#' Each element of the list contains a data matrix, with the same number of columns \eqn{P}{P} for all the studies.
+#' @param start A list containing the slots \code{Phi}, \code{Lambda_s} and \code{Psi_s}, containing the starting
+#' values for the matrix  \code{Phi} of common factor loadings, of size \eqn{P \times K}{P x K}, for
+#' the matrices \code{Lambda_s} of study-specific factor loadings, a list of size \eqn{S}{S}  where each element
+#' contains a matrix with \eqn{P \times J_s}{P x J_s}, and finally for the study-specific matrices of uniquenesses,
+#' a list of size \eqn{S}{S}, where each element contains a vector of length \eqn{P}{P}.
+#' Note that a suitable list of this kind is produced by \code{start_msfa}.
+#' @param nIt Maximum number of iterations for the ECM algorithm. Default is 50000.
+#' @param tol Tolerance for declaring convergence of the ECM algorithm. Default is 10^-7.
+#' @param constraint  Constraint for ensuring identifiability. The default is "block_lower2", which
+#' corresponds to the main proposal of De Vito et al. (2018). An alternative identification
+#' strategy is triggered by  "block_lower1"; this is more restrictive but may work also with smaller
+#' number of variables. Again, the latter strategy is mentioned in De Vito et al. (2018).
+#' @param robust If \code{TRUE}, robust covariance matrix is used in place of the sample covariance. Default
+#' is \code{FALSE}.
+#' @param corr If \code{TRUE}, the analysis will employ the correlation matrix instead of the covariance matrix.
+#' @param mcd If \code{TRUE}, the robust estimator used for the covariance is the same proposed in Pison et al. (2003),
+#' otherwise the default value of the function \code{CovRob} of the \code{robust} library is employed. Default is
+#' \code{FALSE}.
+#' @param trace If \code{TRUE} then trace information is being printed every 1000 iterations of the ECM algorithm.
+#' @return A list  containing the following components:
+#' \item{\code{Phi},\code{Lambda_s}, \code{psi_s}}{the estimated model matrices.}
+#' \item{loglik}{the value of the log likelihood function at the final estimates.}
+#' \item{\code{AIC, BIC}}{model selection criteria at the estimate.}
+#' \item{\code{npar}}{number of model parameters.}
+#' \item{iter}{the number of ECM iterations performed.}
+#' \item{constraint}{the identification constraint enforced.}
+#' @export
+#' @import robust
+#' @importFrom stats cor cov factanal prcomp
+#' @references De Vito, R., Bellio, R., Trippa, L. and Parmigiani, G. (2018). (2019). Multi-study Factor Analysis. Biometrics,  75, 337-346.
+#' @references Pison, G., Rousseeuw, P.J., Filzmoser, P. and Croux, C. (2003). Robust factor analysis. Journal
+#' of Multivariate Analysis, 84, 145-172.
+#'
+ecm_msfax = function (X_s, start, nIt = 50000, tol = 10^-7, constraint = "block_lower2",
+                      robust = FALSE, corr = TRUE, mcd = FALSE, verbose = TRUE, noise_trace = FALSE)
+{
+  S <- length(X_s)
+  j_s <- n_s <- numeric(S)
+  Phi <- start$Phi
+  p <- dim(Phi)[[1]]
+  k <- dim(Phi)[[2]]
+  Lambda_s <- start$Lambda_s
+  psi_s <- start$psi_s # this is a vector of length P
+  theta <- param2vect(start, constraint)
+  Psi_s1 <- Psi_s <- cov_s <- list() # this will store P x P matrices later
+  L_s <- list()
+  for (s in 1:S) {
+    n_s[s] <- dim(X_s[[s]])[[1]]
+    j_s[s] <- dim(as.matrix(Lambda_s[[s]]))[[2]]
+    Psi_s[[s]] <- diag(psi_s[[s]])
+    Psi_s1[[s]] <- diag(1/psi_s[[s]])
+    if ((!robust) & (!corr))
+      cov_s[[s]] <- cov(X_s[[s]])
+    if ((!robust) & corr)
+      cov_s[[s]] <- cor(X_s[[s]])
+    if (robust & mcd)
+      cov_s[[s]] <- covRob(X_s[[s]], estim = "mcd", quan = 0.75,
+                           ntrial = 1000, corr = corr)$cov
+    if (robust & (!mcd))
+      cov_s[[s]] <- covRob(X_s[[s]], corr = corr)$cov
+  }
+  out <- exp_values(Phi, Lambda_s, Psi_s, Psi_s1, cov_s, getdet = TRUE)
+  Sig_s1 <- out$Sig_s1
+  ds_s <- out$ds_s
+  l_stop0 <- 0
+  lm1 <- 0
+  l0 <- loglik_ecm(Sig_s1, ds_s, n_s, cov_s)
 
+  ## for starting point, we need a guess for Gamma and H_s.
+  ## Initializing Gamma
+  ## Let's just take half of the minimum observed variance for each predictor
+  Gamma = diag(p)
+  for(pred in 1:p)
+  {
+    minVar = 1000
+    for(s in 1:S)
+    {
+      if(start$psi_s[[s]][pred] < minVar)
+        minVar = start$psi_s[[s]][pred]
+    }
+
+    Gamma[pred,pred] = 0.5*minVar
+    if(minVar == 1000) print("Oops")
+  }
+  ## Initializing H_s
+  H_s = list()
+  for(s in 1:S)
+    H_s[[s]] = Psi_s[[s]]-Gamma
+
+  gamma_trace = data.frame("x"=diag(Gamma))
+  h_1_trace = data.frame("x"=diag(H_s[[1]]))
+  h_2_trace = data.frame("x"=diag(H_s[[2]]))
+
+  updatePhi = T
+  updateLambda_s = T
+  updateGamma = T
+  updateH_s = T
+
+  for (i in (1:nIt)) {
+    Theta_curr = list("Phi"=Phi,"Lambda_s"=Lambda_s,
+                      "Gamma"=Gamma,
+                      "H_s"=H_s)
+    out <- exp_values(Phi, Lambda_s, Psi_s, Psi_s1, cov_s)
+    Txsxs <- out$Txsxs
+    Txsfs <- out$Txsfs
+    Txsfcs <- out$Txsfcs
+    Tfsfs <- out$Tfsfs
+    Tfcsfcs <- out$Tfcsfcs
+    Tfcsfs <- out$Tfcsfs
+
+    Psi_new <- list()
+    Psi_new1 <- list()
+    psi_new <- list()
+    H_s_new <- list()
+
+    ## CM1: Update H_s
+    ## Doing this first seems to keep Gamma positive
+
+    if(updateH_s)
+    {
+      for(s in 1:S){
+        M = Txsxs[[s]] +
+          Phi %*% Tfcsfcs[[s]] %*% t(Phi) +
+          Lambda_s[[s]] %*% Tfsfs[[s]] %*% t(Lambda_s[[s]]) -
+          2*Txsfcs[[s]] %*% t(Phi) -
+          2*Txsfs[[s]] %*% t(Lambda_s[[s]])+
+          2*Phi %*% Tfcsfs[[s]] %*% t(Lambda_s[[s]])
+        H_s_new[[s]] = diag(diag(M - Gamma))
+      }
+
+      h_1_trace = cbind.data.frame(h_1_trace, diag(H_s_new[[1]]))
+    }
+    if(!updateH_s)
+      H_s_new = H_s
+
+    ## CM2: Update Gamma
+    ## Question: Do we need to update Psi_s and the conditional expectations here?
+    ## If I do this, it tends to lead to zero or negative estimates for Gamma
+    ## If I don't do it, then things stay positive
+
+    # for(s in 1:S){
+    #   Psi_new[[s]] <- H_s_new[[s]] + Gamma
+    #   psi_new[[s]]  <-  diag(H_s_new[[s]] + Gamma)
+    #   ##########inverse
+    #   Psi_new1[[s]] <- diag(1/diag(Psi_new[[s]]))
+    # }
+    #
+    # out <- exp_values(Phi, Lambda_s, Psi_new, Psi_new1, cov_s)
+    # Txsxs <- out$Txsxs
+    # Txsfs <- out$Txsfs
+    # Txsfcs <- out$Txsfcs
+    # Tfsfs <- out$Tfsfs
+    # Tfcsfcs <- out$Tfcsfcs
+    # Tfcsfs <- out$Tfcsfs
+
+    if(updateGamma)
+    {
+      gamma_new = list() # each element here is solved with the polynomial
+      for(pred in 1:p)
+      {
+        # update gamma_new by solving polynomial
+        myPoly = function(x)
+        {
+          q = 0
+          for(s in 1:S)
+          {
+            M = Txsxs[[s]] +
+              Phi %*% Tfcsfcs[[s]] %*% t(Phi) +
+              Lambda_s[[s]] %*% Tfsfs[[s]] %*% t(Lambda_s[[s]]) -
+              2*Txsfcs[[s]] %*% t(Phi) -
+              2*Txsfs[[s]] %*% t(Lambda_s[[s]])+
+              2*Phi %*% Tfcsfs[[s]] %*% t(Lambda_s[[s]])
+
+            otherStudies = setdiff(1:S,s)
+
+            prodTerm = 1
+            for(sPrime in otherStudies)
+            {
+              prodTerm <- prodTerm*(x+diag(H_s_new[[sPrime]])[pred])^2
+            }
+
+            q <- q + n_s[[s]]/2*prodTerm*(M[pred,pred] - (x+diag(H_s_new[[s]])[pred]))
+          }
+
+          return(q)
+        }
+
+        mySol = uniroot(myPoly, lower = 0, upper = 10, extendInt = "downX",trace=1)
+        gamma_new[[pred]] = ifelse(mySol$root>0, mySol$root,0)
+
+      }
+
+      Gamma_new = diag(gamma_new)
+
+      gamma_trace = cbind.data.frame(gamma_trace, diag(Gamma_new))
+    }
+    if(!updateGamma)
+      Gamma_new = Gamma
+
+    ## if either gamma or H_s is still being updated
+    ## Update Psi with new value of Gamma and H_s
+
+    for(s in 1:S){
+      if(updateGamma | updateH_s)
+      {
+        Psi_new[[s]] <- H_s_new[[s]] + Gamma_new
+        psi_new[[s]]  <-  diag(H_s_new[[s]] + Gamma_new)
+        ##########inverse
+        Psi_new1[[s]] <- diag(1/diag(Psi_new[[s]]))
+      }
+      else
+      {
+        Psi_new[[s]] = Psi_s
+        psi_new[[s]] = psi_s
+        Psi_new1[[s]] = Psi_s1
+      }
+    }
+
+
+    ## CM3: Update Phi
+    if(updatePhi)
+    {
+      out <- exp_values(Phi, Lambda_s, Psi_new, Psi_new1, cov_s)
+      Txsfs <- out$Txsfs
+      Txsfcs <- out$Txsfcs
+      Tfsfs <- out$Tfsfs
+      Tfcsfcs <- out$Tfcsfcs
+      Tfcsfs <- out$Tfcsfs
+      C_s <- list()
+      kron_s <- list()
+      for (s in 1:S) {
+        C_s[[s]] <- n_s[s] * Psi_new1[[s]] %*% Txsfcs[[s]] -
+          n_s[s] * Psi_new1[[s]] %*% Lambda_s[[s]] %*%
+          t(Tfcsfs[[s]])
+        kron_s[[s]] <- kronecker(t(Tfcsfcs[[s]]), n_s[s] *
+                                   Psi_new1[[s]])
+      }
+      C <- Reduce("+", C_s)
+      kron <- Reduce("+", kron_s)
+      Phi_vec <- solve(kron) %*% matrix(as.vector(C))
+      Phi_new <- matrix(Phi_vec, p, k)
+    }
+    if(!updatePhi)
+      Phi_new = Phi
+
+    ## CM4: Update Lambda
+    if(updateLambda_s)
+    {
+      out <- exp_values(Phi_new, Lambda_s, Psi_new, Psi_new1,
+                        cov_s)
+      Txsfs <- out$Txsfs
+      Txsfcs <- out$Txsfcs
+      Tfsfs <- out$Tfsfs
+      Tfcsfcs <- out$Tfcsfcs
+      Tfcsfs <- out$Tfcsfs
+      Lambda_new <- list()
+      for (s in 1:S) {
+        Lambda_new[[s]] <- matrix(((Txsfs[[s]] - Phi_new %*%
+                                      Tfcsfs[[s]]) %*% solve(Tfsfs[[s]])), p, j_s[s])
+      }
+    }
+    if(!updateLambda_s)
+      Lambda_new = Lambda_s
+
+    if (constraint == "null") {
+      Phi_new <- Phi_new
+      for (s in 1:S) Lambda_new[[s]] <- Lambda_new[[s]]
+    }
+    if (constraint == "block_lower1") {
+      Phi_new[upper.tri(Phi_new)] <- 0
+      for (s in 1:S) {
+        L_s[[s]] <- cbind(Phi_new, Lambda_new[[s]])
+        L_s[[s]][upper.tri(L_s[[s]])] <- 0
+        Phi_new <- matrix(L_s[[s]][, 1:k], nrow = p,
+                          ncol = k)
+        Lambda_new[[s]] <- L_s[[s]][, (k + 1):(k + j_s[s])]
+      }
+    }
+    if (constraint == "block_lower2") {
+      lambda_vals <- c()
+      psi_vals <- psi_new <- c()
+      Phi_new[upper.tri(Phi_new)] <- 0
+      phi_val <- as.vector(Phi_new[lower.tri(Phi_new, diag = TRUE)])
+      for (s in 1:S) {
+        Lambda_new[[s]][upper.tri(Lambda_new[[s]])] <- 0
+        lambda_vals <- c(lambda_vals, as.vector(Lambda_new[[s]][lower.tri(Lambda_new[[s]],
+                                                                          diag = TRUE)]))
+        psi_new[[s]] <- diag(Psi_new[[s]])
+        psi_vals <- c(psi_vals, psi_new[[s]])
+      }
+
+      L_sTOT <- Reduce("cbind", Lambda_new)
+
+
+      Omega <- cbind(Phi_new, L_sTOT)
+      rank_tot <- qr(Omega)$rank
+      theta_new <- c(phi_val, lambda_vals, psi_vals)
+      param.struct <- list(Phi = Phi_new, Lambda_s = Lambda_new,
+                           psi_s = psi_new)
+      Delta <- theta_new - theta
+      sh <- 0
+
+      while ((rank_tot < k + sum(j_s)) & (sh < 20)) {
+        print("hello")
+        Delta <- Delta/2
+        sh <- sh + 1
+        theta_new <- theta + Delta
+        param <- vect2param(theta_new, param.struct,
+                            constraint, p, k, j_s)
+        Lambda_new <- c()
+        psi_new <- param$psi_new
+        for (s in 1:S) {
+          Lambda_new[[s]] <- param$Lambda_s[[s]]
+          Psi_new[[s]] <- diag(psi_new[[s]])
+          Psi1_new[[s]] <- diag(1/psi_new[[s]])
+        }
+        L_sTOT <- Reduce("cbind", Lambda_new)
+        Phi_new <- param$Phi
+        Omega <- cbind(Phi_new, L_sTOT)
+        rank_tot <- qr(Omega)$rank
+      }
+      if (sh == 20)
+        stop("The full rank condition does not hold\n")
+    }
+
+    out <- exp_values(Phi_new, Lambda_new, Psi_new, Psi_new1,
+                      cov_s, getdet = TRUE)
+    Sig_s1 <- out$Sig_s1
+    ds_s <- out$ds_s
+
+    ## old stopping criteria
+    l1 <- loglik_ecm(Sig_s1, ds_s, n_s, cov_s)
+    a <- (l1 - l0)/(l0 - lm1)
+    l_stop <- lm1 + (1/(1 - a)) * (l0 - lm1)
+    l0 <- loglik_ecm(Sig_s1, ds_s, n_s, cov_s)
+
+    #if ((abs(l_stop - l_stop0) < tol) & i > 1 & l_stop !=
+    #    Inf)
+    #  break
+    Gamma <- Gamma_new
+    H_s <- H_s_new
+    Psi_s <- Psi_new
+    psi_s <- psi_new
+    Phi <- Phi_new
+    Lambda_s <- Lambda_new
+    if (constraint == "block_lower2")
+      theta <- theta_new
+    Psi_s1 <- Psi_new1
+    lm1 <- l0
+    l0 <- l1
+
+    ## new stopping criteria: need to update the parameters
+    new_ll = loglik_msfax(Phi = Phi,
+                          Lambda_s = Lambda_s,
+                          Gamma = Gamma,
+                          H_s = H_s,
+                          n_s = n_s,
+                          cov_s = cov_s)
+
+    ## log likelihood of model with new Phi vs model with old Phi, all other params are new
+    old_ll_phi = loglik_msfax(Phi = Theta_curr$Phi,
+                              Lambda_s = Lambda_s,
+                              Gamma = Gamma,
+                              H_s = H_s,
+                              n_s = n_s,
+                              cov_s = cov_s)
+    ## log likelihood of model with new Lambda_s vs model with old Lambda_s, all other params are new
+    old_ll_lambda_s = loglik_msfax(Phi = Phi,
+                                   Lambda_s = Theta_curr$Lambda_s,
+                                   Gamma = Gamma,
+                                   H_s = H_s,
+                                   n_s = n_s,
+                                   cov_s = cov_s)
+
+    ## log likelihood of model with new Gamma vs model with old Gamma, all other params are new
+    old_ll_gamma = loglik_msfax(Phi = Phi,
+                                   Lambda_s = Lambda_s,
+                                   Gamma = Theta_curr$Gamma,
+                                   H_s = H_s,
+                                   n_s = n_s,
+                                   cov_s = cov_s)
+
+    ## log likelihood of model with new H_s vs model with old H_s, all other params are new
+    old_ll_h_s = loglik_msfax(Phi = Phi,
+                                Lambda_s = Lambda_s,
+                                Gamma = Gamma,
+                                H_s = Theta_curr$H_s,
+                                n_s = n_s,
+                                cov_s = cov_s)
+
+    ## overall old ll
+    old_ll = loglik_msfax(Phi = Theta_curr$Phi,
+                          Lambda_s = Theta_curr$Lambda_s,
+                          Gamma = Theta_curr$Gamma,
+                          H_s = Theta_curr$H_s,
+                          n_s = n_s,
+                          cov_s = cov_s)
+    # # print out ll ratios
+    # print("Phi ratio:")
+    phi_ratio = (new_ll-old_ll_phi)/abs(old_ll_phi)
+    # print("Lambda_s ratio:")
+    lambda_s_ratio = (new_ll-old_ll_lambda_s)/abs(old_ll_lambda_s)
+    # print("Gamma ratio:")
+    gamma_ratio = (new_ll-old_ll_gamma)/abs(old_ll_gamma)
+    # print("H_s ratio")
+    h_s_ratio = (new_ll-old_ll_h_s)/abs(old_ll_h_s)
+
+    print(paste0("Gamma ratio:",gamma_ratio))
+    if(phi_ratio < 1e-5)
+      updatePhi = F
+    if(lambda_s_ratio < 1e-5)
+      updateLambda = F
+    #if(gamma_ratio < 1e-10)
+    #  updateGamma = F
+    #if(h_s_ratio < 1e-5)
+    #  updateH_s = F
+
+    print("update rules:")
+    print(c(updatePhi,updateLambda_s,updateGamma,updateH_s))
+    if ((verbose)) #& (i%% == 0))
+      cat("i=", i, "Criterion for convergence ", abs((old_ll-new_ll)/old_ll), "\n")
+    if (abs((old_ll-new_ll)/old_ll) < tol)
+      break
+    # takeaway from this: Gamma simply does not affect the likelihood very much
+    # the only thing we can really do is just see how much gamma itself is still changing
+    gamma_percent_change = (diag(Gamma_new)-diag(Theta_curr$Gamma))/diag(Theta_curr$Gamma)
+    print("Gamma percent change:")
+    print(round(max(abs(gamma_percent_change)),8))
+
+    l_stop0 <- l_stop
+    if (constraint == "block_lower1")
+      npar <- p * S + k * (p - (k - 1)/2) + sum(j_s * (p -
+                                                         k - (j_s - 1)/2))
+    if (constraint == "block_lower2")
+      npar <- p * S + k * (p - (k - 1)/2) + sum(j_s * (p -
+                                                         (j_s - 1)/2))
+    n_tot <- sum(n_s)
+    AIC <- -2 * l1 + npar * 2
+    BIC <- -2 * l1 + npar * log(n_tot)
+  }
+
+  res <- list(Phi = Phi, Lambda_s = Lambda_s, psi_s = psi_s, Gamma = Gamma, H_s = H_s,
+              loglik = l1, AIC = AIC, BIC = BIC, npar = npar, iter = i,
+              cov_s = cov_s, n_s = n_s, constraint = constraint,
+              gammaTrace = gamma_trace, h_1_trace = h_1_trace)
+  return(res)
+}
 
 #' Estimates the parameters of study-specific FA models
 #'
@@ -695,12 +1179,13 @@ ecm_fa <- function(X_s, tot_s, nIt = 50000, tol = 10^-7, block_lower = TRUE, rob
     ###########stopping rule
     out <- exp_values(Phi, Omega_new, Psi_new, Psi_new1, cov_s, getdet = TRUE)
 
-     Sig_s1 <- out$Sig_s1
+    Sig_s1 <- out$Sig_s1
     ds_s <- out$ds_s
     l1 <- loglik_ecm(Sig_s1,  ds_s, n_s, cov_s)
     a <- (l1 - l0)/ (l0-lm1)
     l_stop <- lm1 + (1/ (1-a)) * (l0-lm1)
     l0 <- loglik_ecm(Sig_s1,  ds_s, n_s, cov_s)
+
     if((trace) & (i %% 100 == 0))  cat("i=", i, "Criterion for convergence ", abs(l_stop-l_stop0), "\n")
     if( (abs(l_stop-l_stop0)<tol) & i > 1 & l_stop != Inf) break
     Psi_s <- Psi_new
